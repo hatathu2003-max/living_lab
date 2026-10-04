@@ -28,9 +28,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-PROJECT_DIR = "/workspaces/living_lab"
-DATA_DIR = os.path.join(PROJECT_DIR, "data")
-DATABI_DIR = os.path.join(PROJECT_DIR, "databi")
+# ============================================================
+# PROJECT PATH
+# Tự động xác định thư mục chứa app.py
+# Hoạt động trên cả GitHub Codespaces và Streamlit Cloud
+# ============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DATABI_DIR = os.path.join(BASE_DIR, "databi")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 
 # ============================================================
@@ -74,8 +82,7 @@ with tab_intro:
     # --------------------------------------------------------
 
     university_image = os.path.join(
-        PROJECT_DIR,
-        "assets",
+        ASSETS_DIR,
         "rotterdam_university.jpg"
     )
 
