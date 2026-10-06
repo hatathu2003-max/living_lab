@@ -197,36 +197,23 @@ with tab_powerbi:
             )
 
 
-## ============================================================
+# ============================================================
 # TAB 3 — INTERACTIVE MAP
-# Living Lab - Rotterdam University of Applied Sciences
+# FAST VERSION
 #
-# Chức năng:
-# 1. Tìm các file .gpkg trong thư mục /data
-# 2. Cho người dùng chọn file GPKG
-# 3. Tự động lấy CỘT ATTRIBUTE CUỐI CÙNG làm cột phân loại
-# 4. Mỗi giá trị unique của cột cuối = một lớp dữ liệu
-# 5. Cho phép chọn lớp muốn hiển thị
-# 6. Mỗi lớp được hiển thị bằng màu khác nhau
-# 7. Có Esri Street và Esri Satellite làm basemap
-# 8. Có Esri Transportation làm overlay
-# 9. Cho phép bật/tắt từng lớp trực tiếp trên bản đồ
+# - Không hiển thị data khi hover
+# - Click feature -> popup có scroll
+# - Cache GPKG
+# - Giảm dữ liệu đưa vào GeoJSON
+# - Layer riêng cho từng class
 # ============================================================
 
 with tab_map:
 
     st.header("Interactive Urban Logistics Map")
 
-    st.write(
-        """
-        Explore the spatial data used in the Living Lab.
-        Select a GeoPackage dataset and choose the classification
-        layers that you want to display.
-        """
-    )
-
     # ========================================================
-    # 1. TÌM TẤT CẢ FILE GPKG TRONG /data
+    # 1. FIND GPKG FILES
     # ========================================================
 
     gpkg_files = glob.glob(
@@ -243,7 +230,7 @@ with tab_map:
     else:
 
         # ====================================================
-        # 2. CHỌN FILE GPKG
+        # 2. SELECT GPKG
         # ====================================================
 
         selected_gpkg = st.selectbox(
@@ -252,13 +239,20 @@ with tab_map:
             format_func=lambda x: os.path.basename(x)
         )
 
+        # ====================================================
+        # 3. CACHE GPKG LOADING
+        # ====================================================
+
+        @st.cache_data(show_spinner="Loading GeoPackage...")
+        def load_gpkg(path):
+
+            gdf = gpd.read_file(path)
+
+            return gdf
+
         try:
 
-            # =================================================
-            # 3. ĐỌC FILE GPKG
-            # =================================================
-
-            gdf = gpd.read_file(selected_gpkg)
+            gdf = load_gpkg(selected_gpkg)
 
             if gdf.empty:
 
@@ -268,9 +262,9 @@ with tab_map:
 
             else:
 
-                # =============================================
-                # 4. KIỂM TRA CRS
-                # =============================================
+                # =================================================
+                # 4. CRS
+                # =================================================
 
                 if gdf.crs is None:
 
@@ -281,21 +275,14 @@ with tab_map:
 
                 else:
 
-                    # Folium sử dụng WGS84 / EPSG:4326
+                    # Folium = WGS84
 
-                    gdf = gdf.to_crs(epsg=4326)
+                    if gdf.crs.to_epsg() != 4326:
+                        gdf = gdf.to_crs(epsg=4326)
 
-                    # =========================================
-                    # 5. XÁC ĐỊNH CỘT ATTRIBUTE CUỐI CÙNG
-                    #
-                    # Geometry KHÔNG được tính là data column.
-                    #
-                    # Ví dụ:
-                    #
-                    # name | population | cluster | geometry
-                    #
-                    # => classification column = cluster
-                    # =========================================
+                    # =================================================
+                    # 5. ATTRIBUTE COLUMNS
+                    # =================================================
 
                     geometry_column = gdf.geometry.name
 
@@ -314,22 +301,20 @@ with tab_map:
 
                     else:
 
-                        # =====================================
-                        # CỘT CUỐI = CỘT PHÂN LOẠI
-                        # =====================================
+                        # =================================================
+                        # 6. LAST ATTRIBUTE COLUMN = CLASSIFICATION
+                        # =================================================
 
-                        classification_column = (
-                            attribute_columns[-1]
-                        )
+                        classification_column = attribute_columns[-1]
 
                         st.info(
-                            "Classification field: "
+                            f"Classification field: "
                             f"**{classification_column}**"
                         )
 
-                        # =====================================
-                        # 6. CLEAN CỘT PHÂN LOẠI
-                        # =====================================
+                        # =================================================
+                        # 7. CLEAN CLASS
+                        # =================================================
 
                         gdf["_map_class"] = (
                             gdf[classification_column]
@@ -338,27 +323,19 @@ with tab_map:
                             .str.strip()
                         )
 
-                        # =====================================
-                        # 7. LẤY TẤT CẢ CLASS
-                        # =====================================
-
                         class_values = sorted(
                             gdf["_map_class"]
                             .unique()
                             .tolist()
                         )
 
-                        # =====================================
-                        # 8. LAYOUT CONTROL
-                        # =====================================
+                        # =================================================
+                        # 8. CONTROLS
+                        # =================================================
 
                         control_col1, control_col2 = st.columns(
                             [2, 1]
                         )
-
-                        # -------------------------------------
-                        # Chọn classification layers
-                        # -------------------------------------
 
                         with control_col1:
 
@@ -367,16 +344,10 @@ with tab_map:
                                 options=class_values,
                                 default=class_values,
                                 help=(
-                                    "Layers are automatically "
-                                    "generated from the unique "
-                                    "values of the last attribute "
-                                    "column."
+                                    "Each unique value of the last "
+                                    "attribute column becomes a layer."
                                 )
                             )
-
-                        # -------------------------------------
-                        # Chọn basemap
-                        # -------------------------------------
 
                         with control_col2:
 
@@ -388,18 +359,18 @@ with tab_map:
                                 ]
                             )
 
-                        # =====================================
-                        # 9. TRANSPORTATION OVERLAY
-                        # =====================================
+                        # =================================================
+                        # 9. TRANSPORTATION
+                        # =================================================
 
                         show_transportation = st.checkbox(
                             "Show transportation network",
                             value=False
                         )
 
-                        # =====================================
-                        # 10. HIỂN THỊ THỐNG KÊ LỚP
-                        # =====================================
+                        # =================================================
+                        # 10. DATA INFORMATION
+                        # =================================================
 
                         with st.expander(
                             "Dataset and layer information"
@@ -425,8 +396,6 @@ with tab_map:
                                 f"{len(class_values)}"
                             )
 
-                            # Đếm feature của từng class
-
                             layer_statistics = (
                                 gdf["_map_class"]
                                 .value_counts()
@@ -444,20 +413,43 @@ with tab_map:
                                 hide_index=True
                             )
 
-                        # =====================================
-                        # 11. TẠO FOLIUM MAP
-                        # =====================================
+                        # =================================================
+                        # 11. FILTER DATA BEFORE CREATING MAP
+                        # =================================================
+
+                        filtered_gdf = gdf[
+                            gdf["_map_class"].isin(
+                                selected_classes
+                            )
+                        ].copy()
+
+                        # Remove null geometry
+
+                        filtered_gdf = filtered_gdf[
+                            filtered_gdf.geometry.notnull()
+                        ]
+
+                        # Remove empty geometry
+
+                        filtered_gdf = filtered_gdf[
+                            ~filtered_gdf.geometry.is_empty
+                        ]
+
+                        # =================================================
+                        # 12. CREATE MAP
+                        # =================================================
 
                         m = folium.Map(
                             location=[51.92, 4.48],
                             zoom_start=11,
                             tiles=None,
-                            control_scale=True
+                            control_scale=True,
+                            prefer_canvas=True
                         )
 
-                        # =====================================
-                        # 12. ESRI STREET BASEMAP
-                        # =====================================
+                        # =================================================
+                        # 13. ESRI STREET
+                        # =================================================
 
                         folium.TileLayer(
 
@@ -482,9 +474,9 @@ with tab_map:
 
                         ).add_to(m)
 
-                        # =====================================
-                        # 13. ESRI SATELLITE BASEMAP
-                        # =====================================
+                        # =================================================
+                        # 14. ESRI SATELLITE
+                        # =================================================
 
                         folium.TileLayer(
 
@@ -509,12 +501,9 @@ with tab_map:
 
                         ).add_to(m)
 
-                        # =====================================
-                        # 14. ESRI TRANSPORTATION OVERLAY
-                        #
-                        # Đây không phải basemap.
-                        # Nó được đặt phía trên Street/Satellite.
-                        # =====================================
+                        # =================================================
+                        # 15. TRANSPORTATION
+                        # =================================================
 
                         folium.TileLayer(
 
@@ -540,9 +529,9 @@ with tab_map:
 
                         ).add_to(m)
 
-                        # =====================================
-                        # 15. MÀU CHO CLASSIFICATION LAYERS
-                        # =====================================
+                        # =================================================
+                        # 16. COLORS
+                        # =================================================
 
                         layer_colors = [
                             "#e41a1c",
@@ -559,42 +548,13 @@ with tab_map:
                             "#d62728"
                         ]
 
-                        # =====================================
-                        # 16. LỌC THEO CLASS ĐƯỢC CHỌN
-                        # =====================================
-
-                        filtered_gdf = gdf[
-                            gdf["_map_class"].isin(
-                                selected_classes
-                            )
-                        ].copy()
-
-                        # Bỏ geometry NULL
-
-                        filtered_gdf = filtered_gdf[
-                            filtered_gdf.geometry.notnull()
-                        ]
-
-                        # Bỏ geometry rỗng
-
-                        filtered_gdf = filtered_gdf[
-                            ~filtered_gdf.geometry.is_empty
-                        ]
-
-                        # =====================================
-                        # 17. VẼ TỪNG CLASS
-                        #
-                        # Mỗi unique value của cột cuối
-                        # là một FeatureGroup riêng biệt.
-                        # =====================================
+                        # =================================================
+                        # 17. CREATE CLASS LAYERS
+                        # =================================================
 
                         for class_index, class_value in enumerate(
                             selected_classes
                         ):
-
-                            # ---------------------------------
-                            # Lọc đúng class
-                            # ---------------------------------
 
                             class_gdf = filtered_gdf[
                                 filtered_gdf["_map_class"]
@@ -604,58 +564,55 @@ with tab_map:
                             if class_gdf.empty:
                                 continue
 
-                            # ---------------------------------
-                            # Màu của class
-                            # ---------------------------------
+                            # ---------------------------------------------
+                            # COLOR
+                            # ---------------------------------------------
 
                             class_color = layer_colors[
                                 class_index
                                 % len(layer_colors)
                             ]
 
-                            # ---------------------------------
-                            # Tạo layer riêng
-                            # ---------------------------------
+                            # ---------------------------------------------
+                            # FEATURE GROUP
+                            # ---------------------------------------------
 
-                            feature_group = (
-                                folium.FeatureGroup(
-                                    name=(
-                                        f"{classification_column}"
-                                        f": {class_value}"
-                                    ),
-                                    show=True
-                                )
+                            feature_group = folium.FeatureGroup(
+
+                                name=(
+                                    f"{classification_column}: "
+                                    f"{class_value}"
+                                ),
+
+                                show=True
                             )
 
-                            # ---------------------------------
-                            # Tooltip fields
+                            # =================================================
+                            # 18. PREPARE POPUP DATA
                             #
-                            # Không đưa temporary column
-                            # _map_class vào tooltip.
-                            # ---------------------------------
+                            # Không đưa geometry vào popup.
+                            # Không dùng tooltip.
+                            # =================================================
 
-                            tooltip_fields = [
+                            popup_fields = [
                                 column
-                                for column
-                                in attribute_columns
+                                for column in attribute_columns
                                 if column in class_gdf.columns
                             ]
 
-                            # ---------------------------------
-                            # Convert GeoDataFrame -> GeoJSON
-                            # ---------------------------------
+                            # Chỉ giữ attribute columns + geometry
 
-                            geojson_data = (
-                                class_gdf.to_json()
-                            )
+                            popup_gdf = class_gdf[
+                                popup_fields + [geometry_column]
+                            ].copy()
 
-                            # ---------------------------------
-                            # VẼ DATA
-                            # ---------------------------------
+                            # =================================================
+                            # 19. GEOJSON
+                            # =================================================
 
-                            folium.GeoJson(
+                            geojson = folium.GeoJson(
 
-                                data=geojson_data,
+                                popup_gdf,
 
                                 name=str(class_value),
 
@@ -667,7 +624,7 @@ with tab_map:
 
                                         "fillColor": color,
 
-                                        "weight": 2,
+                                        "weight": 1.5,
 
                                         "opacity": 0.9,
 
@@ -678,54 +635,72 @@ with tab_map:
                                 highlight_function=(
                                     lambda feature: {
 
-                                        "weight": 4,
+                                        "weight": 3,
 
-                                        "fillOpacity": 0.8
+                                        "fillOpacity": 0.75
                                     }
-                                ),
-
-                                tooltip=(
-                                    folium.GeoJsonTooltip(
-
-                                        fields=tooltip_fields,
-
-                                        aliases=[
-                                            f"{field}:"
-                                            for field
-                                            in tooltip_fields
-                                        ],
-
-                                        sticky=False,
-
-                                        localize=True
-                                    )
                                 )
 
-                            ).add_to(feature_group)
+                            )
 
-                            # ---------------------------------
-                            # Add class vào map
-                            # ---------------------------------
+                            # =================================================
+                            # 20. CLICK POPUP
+                            #
+                            # Hover = KHÔNG HIỆN DATA
+                            #
+                            # Click = Popup
+                            # =================================================
+
+                            popup = folium.GeoJsonPopup(
+
+                                fields=popup_fields,
+
+                                aliases=[
+                                    f"{field}"
+                                    for field in popup_fields
+                                ],
+
+                                localize=True,
+
+                                labels=True,
+
+                                sticky=False,
+
+                                max_width=450,
+
+                                max_height=350,
+
+                                style=(
+                                    """
+                                    background-color: white;
+                                    border-radius: 8px;
+                                    padding: 10px;
+                                    font-size: 13px;
+                                    """
+                                )
+                            )
+
+                            popup.add_to(geojson)
+
+                            # Add GeoJSON to layer
+
+                            geojson.add_to(feature_group)
+
+                            # Add layer to map
 
                             feature_group.add_to(m)
 
-                        # =====================================
-                        # 18. AUTO ZOOM THEO DATA ĐƯỢC CHỌN
-                        # =====================================
+                        # =================================================
+                        # 21. AUTO ZOOM
+                        # =================================================
 
                         if not filtered_gdf.empty:
 
                             try:
 
-                                (
-                                    minx,
-                                    miny,
-                                    maxx,
-                                    maxy
-
-                                ) = filtered_gdf.total_bounds
-
-                                # Kiểm tra bounds hợp lệ
+                                minx, miny, maxx, maxy = (
+                                    filtered_gdf.total_bounds
+                                )
 
                                 if (
                                     -180 <= minx <= 180
@@ -747,41 +722,36 @@ with tab_map:
                             except Exception:
                                 pass
 
-                        # =====================================
-                        # 19. LAYER CONTROL
-                        #
-                        # Góc phải map sẽ có:
-                        #
-                        # BASE LAYERS
-                        # ○ Esri Street
-                        # ○ Esri Satellite
-                        #
-                        # OVERLAYS
-                        # ☐ Transportation
-                        # ☑ Class 1
-                        # ☑ Class 2
-                        # ...
-                        # =====================================
+                        # =================================================
+                        # 22. LAYER CONTROL
+                        # =================================================
 
                         folium.LayerControl(
                             collapsed=False,
                             position="topright"
                         ).add_to(m)
 
-                        # =====================================
-                        # 20. HIỂN THỊ MAP
-                        # =====================================
+                        # =================================================
+                        # 23. DISPLAY MAP
+                        # =================================================
 
                         st_folium(
+
                             m,
+
                             height=750,
+
                             use_container_width=True,
-                            key="living_lab_interactive_map"
+
+                            key=(
+                                "living_lab_interactive_map"
+                            )
+
                         )
 
-                        # =====================================
-                        # 21. MAP SUMMARY
-                        # =====================================
+                        # =================================================
+                        # 24. SUMMARY
+                        # =================================================
 
                         if selected_classes:
 
@@ -790,15 +760,15 @@ with tab_map:
                                 f"{len(filtered_gdf):,} features "
                                 f"across "
                                 f"{len(selected_classes)} "
-                                f"selected layer(s)."
+                                f"selected layer(s). "
+                                f"Click a feature to view its data."
                             )
 
                         else:
 
                             st.warning(
                                 "No classification layer selected. "
-                                "Select at least one layer above "
-                                "to display spatial data."
+                                "Select at least one layer above."
                             )
 
         except Exception as e:
