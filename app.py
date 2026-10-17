@@ -680,14 +680,16 @@ with tab_map:
                         # Feature Group
                         # ---------------------------------------------
 
-                        classification_group = (
-                            folium.FeatureGroup(
-                                name=(
-                                    f"{classification_column}: "
-                                    f"{class_value}"
-                                ),
-                                show=True
-                            )
+                        classification_group = folium.FeatureGroup(
+                            name=(
+                                f'<span style="display:inline-block;'
+                                f'width:12px;height:12px;'
+                                f'background-color:{class_color};'
+                                f'border:1px solid #777;'
+                                f'margin-right:6px;"></span>'
+                                f'{class_value}'
+                            ),
+                            show=True
                         )
 
                         # ---------------------------------------------
@@ -1059,7 +1061,7 @@ with tab_map:
                     # =================================================
 
                     folium.LayerControl(
-                        collapsed=True,
+                        collapsed=False,
                         position="topright"
                     ).add_to(m)
 
