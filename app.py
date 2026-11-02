@@ -1251,8 +1251,6 @@ with tab_intro:
         """
         **Introduction:** General information about the Living Lab.
 
-        **Power BI:** Interactive dashboards and analytical results.
-
         **Interactive Map:** Spatial visualisation of
         GeoPackage and shipment data.
         """
