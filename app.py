@@ -1203,12 +1203,10 @@ st.title("Living Lab")
 
 st.caption("Rotterdam University of Applied Sciences")
 
-tab_intro, tab_powerbi, tab_map = st.tabs([
+tab_intro, tab_map = st.tabs([
     "1. Introduction",
-    "2. Power BI",
-    "3. Interactive Map"
+    "2. Interactive Map"
 ])
-
 
 # ============================================================
 # TAB 1 — INTRODUCTION
@@ -1260,34 +1258,8 @@ with tab_intro:
         """
     )
 
-
 # ============================================================
-# TAB 2 — POWER BI
-# ============================================================
-
-with tab_powerbi:
-
-    st.header("Power BI Dashboard")
-
-    POWERBI_URL = ""
-
-    if POWERBI_URL:
-
-        st.components.v1.iframe(
-            POWERBI_URL,
-            height=800,
-            scrolling=True
-        )
-
-    else:
-
-        st.info(
-            "Power BI dashboard has not been configured yet."
-        )
-
-
-# ============================================================
-# TAB 3 — INTERACTIVE MAP
+# TAB 2 — INTERACTIVE MAP
 # ============================================================
 
 with tab_map:
