@@ -475,16 +475,27 @@ def prepare_shipment_summary(
 # ============================================================
 
 def add_scrollable_popup(geojson_layer, fields):
-
     if not fields:
         return
 
+    # Số thứ tự cột cần hiển thị (đếm từ 1)
+    selected_column_numbers = [
+        1, 2, 8, 11, 12, 29, 33, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 54, 61, 108, 109, 129, 132, 161, 162
+    ]
+
+    # Chuyển số thứ tự thành tên cột thực tế
+    selected_fields = [
+        fields[number - 1]
+        for number in selected_column_numbers
+        if 1 <= number <= len(fields)
+    ]
+
+    if not selected_fields:
+        return
+
     popup = folium.GeoJsonPopup(
-        fields=fields,
-        aliases=[
-            f"{field}:"
-            for field in fields
-        ],
+        fields=selected_fields,
+        aliases=[f"{field}:" for field in selected_fields],
         labels=True,
         localize=True,
         min_width=600,
