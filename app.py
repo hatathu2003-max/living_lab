@@ -56,8 +56,6 @@ LABEL_SAMPLE_COUNT = 5
 
 LABEL_REFRESH_DELAY = 120
 
-# Popup configuration
-
 POPUP_MAX_HEIGHT = 350
 POPUP_MAX_WIDTH = 750
 
@@ -246,7 +244,7 @@ def prepare_display_geojson(path, version, tolerance):
 
 
 # ============================================================
-# 7. CACHED POSTCODE GROUPS
+# 7. CACHED POSTCODE GROUPS AND AREA CALCULATION
 # ============================================================
 
 @st.cache_data(show_spinner=False)
@@ -263,9 +261,19 @@ def prepare_postcode_groups(path, version):
     if any(c not in gdf.columns for c in required):
         return {}
 
+    # Calculate individual neighbourhood areas.
+    # EPSG:28992 uses metres, so divide by 1,000,000
+    # to obtain km².
+
+    area_gdf = gdf.to_crs(epsg=28992)
+
     data = gdf[
         required + ["geometry"]
     ].copy()
+
+    data["_area_km2"] = (
+        area_gdf.geometry.area / 1_000_000
+    ).values
 
     data["_postcode"] = (
         data["meest_voorkomende_postcode"]
@@ -328,6 +336,11 @@ def prepare_postcode_groups(path, version):
             .tolist()
         )
 
+        # Sum individual neighbourhood areas.
+        # Do not use the area of unary_union here.
+
+        total_area_km2 = group["_area_km2"].sum()
+
         simplified = combined.simplify(
             0.00003,
             preserve_topology=True
@@ -344,7 +357,9 @@ def prepare_postcode_groups(path, version):
                 anchor.y
             ],
 
-            "geometry": simplified.__geo_interface__
+            "geometry": simplified.__geo_interface__,
+
+            "area_km2": float(total_area_km2)
 
         }
 
@@ -352,14 +367,111 @@ def prepare_postcode_groups(path, version):
 
 
 # ============================================================
+# 7.1. INDEPENDENT SHIPMENT SUMMARY TABLE
+# ============================================================
+
+@st.cache_data(show_spinner=False)
+def prepare_shipment_summary(
+    path,
+    version,
+    csv_path,
+    csv_version
+):
+
+    # Get postcode groups and combined areas.
+    postcode_groups = prepare_postcode_groups(
+        path,
+        version
+    )
+
+    # Load shipment CSV.
+    shipment_df = load_csv(
+        csv_path,
+        csv_version
+    ).copy()
+
+    if shipment_df.shape[1] < 4:
+        return pd.DataFrame()
+
+    shipment_columns = list(
+        shipment_df.columns[:4]
+    )
+
+    # Normalize postcode.
+    shipment_df["_postcode"] = (
+        shipment_df.iloc[:, 0]
+        .map(normalize_key)
+    )
+
+    shipment_df = shipment_df.loc[
+        shipment_df["_postcode"] != ""
+    ].copy()
+
+    # CSV already contains total shipment per postcode.
+    # Keep one record per postcode; do not sum duplicates.
+
+    shipment_df = shipment_df.drop_duplicates(
+        "_postcode",
+        keep="first"
+    )
+
+    rows = []
+
+    for _, row in shipment_df.iterrows():
+
+        postcode = row["_postcode"]
+
+        # Only include postcodes available in both datasets.
+        if postcode not in postcode_groups:
+            continue
+
+        region = postcode_groups[postcode]
+
+        total_area = region["area_km2"]
+
+        shipment_values = [
+            parse_number(row[shipment_columns[1]]),
+            parse_number(row[shipment_columns[2]]),
+            parse_number(row[shipment_columns[3]])
+        ]
+
+        row_data = {
+            "Postcode": postcode,
+            "Neighbourhoods": region["name"],
+            "Total Area (km²)": total_area
+        }
+
+        for i, column in enumerate(shipment_columns[1:4]):
+
+            value = shipment_values[i]
+
+            row_data[str(column)] = value
+
+            if value is not None and total_area > 0:
+
+                row_data[f"{column} / km²"] = (
+                    value / total_area
+                )
+
+            else:
+
+                row_data[f"{column} / km²"] = None
+
+        rows.append(row_data)
+
+    result = pd.DataFrame(rows)
+
+    if not result.empty:
+
+        result = result.sort_values(
+            "Postcode"
+        ).reset_index(drop=True)
+
+    return result
+
+
+# ============================================================
 # 8. SCROLLABLE GIS POPUPS
-#
-# Applies to:
-# - Classification Data
-# - Additional GIS Layers
-#
-# Popup height is limited.
-# A vertical scrollbar appears when needed.
 # ============================================================
 
 def add_scrollable_popup(geojson_layer, fields):
@@ -393,10 +505,6 @@ def add_popup_css(folium_map):
     popup_css = f"""
     <style>
 
-    /* ================================================
-       POPUP CONTENT
-       ================================================ */
-
     .leaflet-popup-content {{
 
         max-height: {POPUP_MAX_HEIGHT}px !important;
@@ -419,11 +527,6 @@ def add_popup_css(folium_map):
 
     }}
 
-
-    /* ================================================
-       POPUP WRAPPER
-       ================================================ */
-
     .leaflet-popup-content-wrapper {{
 
         max-width: {POPUP_MAX_WIDTH}px !important;
@@ -433,11 +536,6 @@ def add_popup_css(folium_map):
         box-shadow: 0 3px 12px rgba(0,0,0,0.18);
 
     }}
-
-
-    /* ================================================
-       POPUP TABLE
-       ================================================ */
 
     .leaflet-popup-content table {{
 
@@ -450,7 +548,6 @@ def add_popup_css(folium_map):
         line-height: 1.4;
 
     }}
-
 
     .leaflet-popup-content th,
     .leaflet-popup-content td {{
@@ -471,7 +568,6 @@ def add_popup_css(folium_map):
 
     }}
 
-
     .leaflet-popup-content th {{
 
         font-weight: 600;
@@ -480,17 +576,11 @@ def add_popup_css(folium_map):
 
     }}
 
-
     .leaflet-popup-content tr:nth-child(even) {{
 
         background-color: #fafbfc;
 
     }}
-
-
-    /* ================================================
-       WEBKIT SCROLLBAR
-       ================================================ */
 
     .leaflet-popup-content::-webkit-scrollbar {{
 
@@ -500,7 +590,6 @@ def add_popup_css(folium_map):
 
     }}
 
-
     .leaflet-popup-content::-webkit-scrollbar-track {{
 
         background: #f1f3f5;
@@ -509,7 +598,6 @@ def add_popup_css(folium_map):
 
     }}
 
-
     .leaflet-popup-content::-webkit-scrollbar-thumb {{
 
         background: #aab7c4;
@@ -517,7 +605,6 @@ def add_popup_css(folium_map):
         border-radius: 4px;
 
     }}
-
 
     .leaflet-popup-content::-webkit-scrollbar-thumb:hover {{
 
@@ -755,7 +842,7 @@ class ResponsiveShipmentCharts(MacroElement):
 
 
     // ========================================================
-    // PROJECT GEOMETRY ONCE PER UPDATE
+    // PROJECT GEOMETRY
     // ========================================================
 
     function projectGeometry(geometry) {
@@ -948,7 +1035,13 @@ class ResponsiveShipmentCharts(MacroElement):
 
                 formatNumber(value) +
 
-                '</b></div>' +
+                '</b>' +
+
+                '<div style="font-size:9px;color:#667085;margin-top:1px;">' +
+
+                (feature.unit || '') +
+
+                '</div></div>' +
 
                 '<div style="' +
                 'height:6px;' +
@@ -1195,6 +1288,7 @@ class ResponsiveShipmentCharts(MacroElement):
 """)
 
 
+
 # ============================================================
 # 10. MAIN APPLICATION
 # ============================================================
@@ -1207,6 +1301,7 @@ tab_intro, tab_map = st.tabs([
     "1. Introduction",
     "2. Interactive Map"
 ])
+
 
 # ============================================================
 # TAB 1 — INTRODUCTION
@@ -1255,6 +1350,7 @@ with tab_intro:
         GeoPackage and shipment data.
         """
     )
+
 
 # ============================================================
 # TAB 2 — INTERACTIVE MAP
@@ -1345,11 +1441,7 @@ with tab_map:
 
 
     # ========================================================
-    # SHIPMENT DATA
-    #
-    # Automatically loads the first CSV in /data.
-    #
-    # All three indicators are enabled by default.
+    # SHIPMENT DATA CONTROLS
     # ========================================================
 
     st.divider()
@@ -1366,6 +1458,12 @@ with tab_map:
     csv_fields = []
     csv_lookup = {}
     selected_indicators = []
+
+							  
+
+    shipment_unit = "Shipment"
+
+    csv_path = None
 
     if not csv_files:
 
@@ -1406,13 +1504,26 @@ with tab_map:
 
                 csv_fields = list(csv_df.columns[:4])
 
+                # Measurement selector for map charts.
+
+                shipment_unit = st.radio(
+                    "Shipment measurement",
+                    [
+                        "Shipment",
+                        "Shipment / km²"
+                    ],
+                    horizontal=True,
+                    index=0,
+                    key="shipment_unit"
+                )
+
+                # Three shipment indicators.
+
                 indicator_cols = st.columns(3)
 
                 for i, name in enumerate(csv_fields[1:4]):
 
                     with indicator_cols[i]:
-
-                        # All indicators enabled by default.
 
                         if st.checkbox(
                             str(name),
@@ -1422,6 +1533,8 @@ with tab_map:
 
                             selected_indicators.append(i)
 
+                # Match CSV with postcode.
+
                 csv_df["_postcode"] = (
                     csv_df.iloc[:, 0]
                     .map(normalize_key)
@@ -1429,7 +1542,10 @@ with tab_map:
 
                 csv_df = csv_df.loc[
                     csv_df["_postcode"] != ""
-                ]
+                ].copy()
+
+                # CSV has one total shipment record per postcode.
+                # Keep one record per postcode; do not sum duplicates.
 
                 csv_df = csv_df.drop_duplicates(
                     "_postcode",
@@ -1439,14 +1555,20 @@ with tab_map:
                 for _, row in csv_df.iterrows():
 
                     csv_lookup[row["_postcode"]] = [
+
                         parse_number(row[csv_fields[1]]),
+
                         parse_number(row[csv_fields[2]]),
+
                         parse_number(row[csv_fields[3]])
+
                     ]
 
         except Exception as exc:
 
-            st.warning(f"Unable to read shipment CSV: {exc}")
+            st.warning(
+                f"Unable to read shipment CSV: {exc}"
+            )
 
             csv_df = None
 
@@ -1486,11 +1608,15 @@ with tab_map:
 
         except Exception as exc:
 
-            st.warning(f"GIS library error: {exc}")
+            st.warning(
+                f"GIS library error: {exc}"
+            )
 
     else:
 
-        st.info("No additional GPKG found in /lib_gpkg.")
+        st.info(
+            "No additional GPKG found in /lib_gpkg."
+        )
 
 
     # ========================================================
@@ -1505,11 +1631,6 @@ with tab_map:
         prefer_canvas=True
     )
 
-
-    # ========================================================
-    # ADD SCROLLABLE POPUP CSS
-    # ========================================================
-
     add_popup_css(m)
 
 
@@ -1521,8 +1642,8 @@ with tab_map:
         tiles=(
             "https://server.arcgisonline.com/"
             "ArcGIS/rest/services/"
-            "World_Street_Map/"
-            "MapServer/tile/{z}/{y}/{x}"
+							   
+            "World_Street_Map/MapServer/tile/{z}/{y}/{x}"
         ),
         attr="Esri",
         name="Esri Street",
@@ -1534,8 +1655,8 @@ with tab_map:
         tiles=(
             "https://server.arcgisonline.com/"
             "ArcGIS/rest/services/"
-            "World_Imagery/"
-            "MapServer/tile/{z}/{y}/{x}"
+							
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
         ),
         attr="Esri",
         name="Esri Satellite",
@@ -1548,8 +1669,8 @@ with tab_map:
             "https://server.arcgisonline.com/"
             "ArcGIS/rest/services/"
             "Reference/"
-            "World_Transportation/"
-            "MapServer/tile/{z}/{y}/{x}"
+								   
+            "World_Transportation/MapServer/tile/{z}/{y}/{x}"
         ),
         attr="Esri",
         name="Transportation Network",
@@ -1642,11 +1763,6 @@ with tab_map:
             )
         )
 
-
-        # ====================================================
-        # SCROLLABLE CLASSIFICATION POPUP
-        # ====================================================
-
         if popup_fields:
 
             add_scrollable_popup(
@@ -1732,11 +1848,6 @@ with tab_map:
                 if c != lib.geometry.name
             ]
 
-
-            # ================================================
-            # SCROLLABLE ADDITIONAL GIS POPUP
-            # ================================================
-
             if fields:
 
                 add_scrollable_popup(
@@ -1756,7 +1867,7 @@ with tab_map:
 
 
     # ========================================================
-    # SHIPMENT CHARTS
+    # SHIPMENT CHARTS ON MAP
     # ========================================================
 
     if csv_df is not None and selected_indicators:
@@ -1768,20 +1879,10 @@ with tab_map:
 
         features = []
 
-        maxima = [1.0, 1.0, 1.0]
-
-        for values in csv_lookup.values():
-
-            for i, value in enumerate(values):
-
-                if value is not None:
-
-                    maxima[i] = max(
-                        maxima[i],
-                        value
-                    )
-
         selected_class_set = set(selected_classes)
+
+        # One chart per postcode.
+        # Shipment is already the postcode total in the CSV.
 
         for postcode, region in postcode_groups.items():
 
@@ -1794,6 +1895,42 @@ with tab_map:
             ):
                 continue
 
+														
+
+            total_shipment = csv_lookup[postcode].copy()
+
+												
+									
+
+            total_area_km2 = region["area_km2"]
+
+									  
+
+            if shipment_unit == "Shipment / km²":
+
+                if total_area_km2 > 0:
+
+                    display_values = [
+
+                        value / total_area_km2
+                        if value is not None else None
+
+                        for value in total_shipment
+
+                    ]
+
+                else:
+
+                    display_values = [
+                        None,
+                        None,
+                        None
+                    ]
+
+            else:
+
+                display_values = total_shipment
+
             features.append({
 
                 "name": region["name"],
@@ -1804,14 +1941,50 @@ with tab_map:
 
                 "geometry": region["geometry"],
 
-                "values": csv_lookup[postcode]
+                "values": display_values,
+
+                "area_km2": total_area_km2,
+
+                "unit": (
+                    "shipments/km²"
+                    if shipment_unit == "Shipment / km²"
+                    else "shipments"
+                )
 
             })
+
+
+        # ====================================================
+        # CHART SCALING
+        # ====================================================
+
+        maxima = [1.0, 1.0, 1.0]
+
+        for feature in features:
+
+            for i, value in enumerate(feature["values"]):
+
+                if value is not None:
+
+                    maxima[i] = max(
+                        maxima[i],
+                        value
+                    )
+
+
+        # ====================================================
+        # JAVASCRIPT CLASSIFICATION REFERENCES
+        # ====================================================
 
         js_refs = ", ".join(
             f"{json.dumps(key)}: {value}"
             for key, value in class_refs.items()
         )
+
+
+        # ====================================================
+        # ADD RESPONSIVE CHARTS
+        # ========================================================
 
         if features:
 
@@ -1827,6 +2000,14 @@ with tab_map:
             f"Shipment data matched with "
             f"{len(features):,} postcode groups."
         )
+
+        if shipment_unit == "Shipment / km²":
+
+            st.caption(
+                "Values represent total shipment divided by "
+                "the combined area of all neighbourhoods "
+                "sharing the same postcode."
+            )
 
 
     # ========================================================
@@ -1878,8 +2059,112 @@ with tab_map:
 
 
     # ========================================================
-    # SUMMARY
+    # INDEPENDENT SHIPMENT SUMMARY TABLE
     # ========================================================
+
+    st.divider()
+
+    st.subheader("Shipment Summary by Postcode")
+
+    if csv_path is not None and csv_df is not None:
+
+        try:
+
+            shipment_summary = prepare_shipment_summary(
+                main_path,
+                main_version,
+                csv_path,
+                file_version(csv_path)
+            )
+
+            if not shipment_summary.empty:
+
+                st.caption(
+                    "Shipment values are postcode-level totals. "
+                    "Total area is the combined area of all "
+                    "neighbourhoods sharing the same postcode. "
+                    "Shipment / km² is calculated by dividing "
+                    "postcode shipment by total postcode area."
+                )
+
+                # Format numeric values for display.
+                numeric_columns = [
+                    column
+                    for column in shipment_summary.columns
+                    if column not in [
+                        "Postcode",
+                        "Neighbourhoods"
+                    ]
+                ]
+
+                column_config = {
+
+                    "Postcode": st.column_config.TextColumn(
+                        "Postcode"
+                    ),
+
+                    "Neighbourhoods": st.column_config.TextColumn(
+                        "Neighbourhoods",
+                        width="large"
+                    ),
+
+                    "Total Area (km²)": st.column_config.NumberColumn(
+                        "Total Area (km²)",
+                        format="%.3f"
+                    )
+
+                }
+
+                for column in numeric_columns:
+
+                    if column == "Total Area (km²)":
+                        continue
+
+                    column_config[column] = (
+                        st.column_config.NumberColumn(
+                            column,
+                            format="%,.2f"
+                        )
+                    )
+
+                st.dataframe(
+                    shipment_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=450,
+                    column_config=column_config
+                )
+
+                st.caption(
+                    f"Showing {len(shipment_summary):,} postcode groups."
+                )
+
+            else:
+
+                st.info(
+                    "No matching shipment data found between "
+                    "the CSV and classification dataset."
+                )
+
+        except Exception as exc:
+
+            st.warning(
+                f"Unable to prepare shipment summary: {exc}"
+            )
+
+    else:
+
+        st.info(
+            "Shipment summary is unavailable because "
+            "no valid CSV data was loaded."
+        )
+
+
+    # ========================================================
+    # SUMMARY METRICS
+    # ========================================================
+
+    st.divider()
 
     col1, col2 = st.columns(2)
 
